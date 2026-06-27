@@ -12,6 +12,7 @@ import {
 } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { inputCls } from "../components/ProjectPicker";
+import { getErrorMessage } from "../utils/errors";
 import type {
   Budget,
   BudgetAnalysis,
@@ -50,31 +51,74 @@ export default function ProjectDetail() {
   const [budget, setBudget] = React.useState<Budget | null>(null);
   const [analysis, setAnalysis] = React.useState<BudgetAnalysis | null>(null);
   const [reports, setReports] = React.useState<ProgressReport[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [canViewMembers, setCanViewMembers] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [actionError, setActionError] = React.useState<string | null>(null);
 
-  const canManage =
-    user?.orgRole === "admin" || user?.orgRole === "projectManager";
-  const canBudget = canManage;
+  const isAdmin = user?.orgRole === "admin";
+
+  function clearFeedback() {
+    setMsg(null);
+    setActionError(null);
+  }
+
+  async function runAction(action: () => Promise<void>, successMessage: string) {
+    clearFeedback();
+    try {
+      await action();
+      setMsg(successMessage);
+      await load();
+    } catch (e: unknown) {
+      setActionError(getErrorMessage(e));
+    }
+  }
+
+  function projectManagerId(project: Project | null): string {
+    if (!project) return "";
+    const pmRef = project.projectManagerId;
+    return typeof pmRef === "object" ? pmRef._id : pmRef ?? "";
+  }
+
+  function canManageProject(project: Project | null): boolean {
+    if (!user || !project) return false;
+    return isAdmin || user._id === projectManagerId(project);
+  }
 
   async function load() {
     if (!id) return;
+    setLoading(true);
     setError(null);
     try {
       const p = await projectsApi.get(id);
-      setProject(p);
+      const manageProject = canManageProject(p);
+
       const [ms, ts, mem, rep] = await Promise.all([
         milestonesApi.list(id),
         tasksApi.list(id),
-        projectsApi.listMembers(id),
+        projectsApi.listMembers(id).catch(() => null),
         reportsApi.list(id).catch(() => []),
       ]);
+
+      setProject(p);
       setMilestones(ms);
       setTasks(ts);
-      setMembers(mem.members);
-      setPm(mem.projectManager);
       setReports(rep);
-      if (canBudget) {
+
+      if (mem) {
+        setMembers(mem.members);
+        setPm(mem.projectManager);
+        setCanViewMembers(true);
+      } else {
+        setMembers([]);
+        setPm(
+          typeof p.projectManagerId === "object" ? p.projectManagerId : null
+        );
+        setCanViewMembers(false);
+      }
+
+      if (manageProject) {
         try {
           setSummary(await estimatesApi.summary(id));
         } catch {
@@ -88,15 +132,23 @@ export default function ProjectDetail() {
           setBudget(null);
           setAnalysis(null);
         }
+      } else {
+        setSummary(null);
+        setBudget(null);
+        setAnalysis(null);
       }
-      if (canManage) {
+
+      if (isAdmin) {
         usersApi
           .list()
           .then((list) => setOrgUsers(list.filter((u) => u.orgRole !== "superAdmin")))
           .catch(() => {});
       }
     } catch (e: unknown) {
+      setProject(null);
       setError(e instanceof Error ? e.message : "Failed to load project");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -109,10 +161,12 @@ export default function ProjectDetail() {
     title: string;
     milestoneId: string;
     priority: string;
+    assigneeId?: string;
     estimatedHours: number;
     hourlyRate: number;
   }>();
   const memberForm = useForm<{ userId: string }>();
+  const changePmForm = useForm<{ projectManagerId: string }>();
   const budgetForm = useForm<{ allocatedAmount: number }>();
   const expenseForm = useForm<{
     date: string;
@@ -130,9 +184,80 @@ export default function ProjectDetail() {
     notes?: string;
   }>();
 
+  React.useEffect(() => {
+    if (!project) return;
+    const manage = isAdmin || user?._id === projectManagerId(project);
+    const teamMemberOnProject = !isAdmin && !manage && !canViewMembers;
+
+    if (!canViewMembers && tab === "members") {
+      setTab("overview");
+      return;
+    }
+    if ((!manage && !isAdmin) && (tab === "estimate" || tab === "budget")) {
+      setTab("overview");
+      return;
+    }
+    if (teamMemberOnProject && tab === "reports") {
+      setTab("overview");
+    }
+  }, [canViewMembers, tab, project, isAdmin, user?._id]);
+
   if (!id) return null;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[40vh] text-sm text-white/40">
+        Loading project…
+      </div>
+    );
+  }
   if (error) return <div className="text-red-400 text-sm">{error}</div>;
-  if (!project) return <div className="text-sm text-white/40">Loading…</div>;
+  if (!project) return null;
+
+  const pmId = projectManagerId(project);
+  const canManage = canManageProject(project);
+  const isTeamMemberOnProject = !isAdmin && !canManage && !canViewMembers;
+
+  const visibleTabs = TABS.filter((t) => {
+    if (t === "members" && !canViewMembers) return false;
+    if ((t === "estimate" || t === "budget") && !canManage) return false;
+    if (t === "reports" && isTeamMemberOnProject) return false;
+    return true;
+  });
+
+  const memberUserIds = new Set(
+    members.map((m) =>
+      typeof m.userId === "object" ? m.userId._id : String(m.userId)
+    )
+  );
+
+  const assignableOrgUsers = orgUsers.filter(
+    (u) =>
+      u.isActive !== false &&
+      (u.orgRole === "member" ||
+        u.orgRole === "teamMember" ||
+        u.orgRole === "projectManager")
+  );
+
+  const pmCandidates = assignableOrgUsers;
+  const teamMemberCandidates = assignableOrgUsers.filter(
+    (u) => u._id !== pmId && !memberUserIds.has(u._id)
+  );
+
+  const assigneeCandidates: User[] = [];
+  const assigneeSeen = new Set<string>();
+  const addAssignee = (u: User | string | null | undefined) => {
+    if (!u || typeof u === "string") return;
+    if (assigneeSeen.has(u._id)) return;
+    assigneeSeen.add(u._id);
+    assigneeCandidates.push(u);
+  };
+  if (typeof project.projectManagerId === "object") {
+    addAssignee(project.projectManagerId);
+  }
+  addAssignee(pm);
+  members.forEach((m) => {
+    if (typeof m.userId === "object") addAssignee(m.userId);
+  });
 
   const pmName =
     typeof project.projectManagerId === "object"
@@ -160,10 +285,13 @@ export default function ProjectDetail() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setTab(t);
+              clearFeedback();
+            }}
             className={`px-3 py-1 rounded-lg text-xs capitalize ${
               tab === t
                 ? "bg-purple-600/30 text-purple-200 border border-purple-500/30"
@@ -176,6 +304,11 @@ export default function ProjectDetail() {
       </div>
 
       {msg && <div className="text-xs text-emerald-400">{msg}</div>}
+      {actionError && (
+        <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
+          {actionError}
+        </div>
+      )}
 
       {tab === "overview" && (
         <div className="grid md:grid-cols-3 gap-3">
@@ -198,12 +331,12 @@ export default function ProjectDetail() {
         <div className="space-y-3">
           {canManage && (
             <form
-              onSubmit={milestoneForm.handleSubmit(async (data) => {
-                await milestonesApi.create(id, data);
-                milestoneForm.reset();
-                setMsg("Milestone created");
-                load();
-              })}
+              onSubmit={milestoneForm.handleSubmit((data) =>
+                runAction(async () => {
+                  await milestonesApi.create(id, data);
+                  milestoneForm.reset();
+                }, "Milestone created")
+              )}
               className="flex flex-wrap gap-2"
             >
               <input {...milestoneForm.register("title", { required: true })} placeholder="Title" className={inputCls + " max-w-xs"} />
@@ -224,23 +357,32 @@ export default function ProjectDetail() {
         <div className="space-y-4">
           {canManage && milestones.length > 0 && (
             <form
-              onSubmit={taskForm.handleSubmit(async (data) => {
-                await tasksApi.create(id, {
-                  ...data,
-                  estimatedHours: Number(data.estimatedHours),
-                  hourlyRate: Number(data.hourlyRate),
-                  status: "todo",
-                });
-                taskForm.reset();
-                setMsg("Task created");
-                load();
-              })}
+              onSubmit={taskForm.handleSubmit((data) =>
+                runAction(async () => {
+                  await tasksApi.create(id, {
+                    ...data,
+                    assigneeId: data.assigneeId || undefined,
+                    estimatedHours: Number(data.estimatedHours),
+                    hourlyRate: Number(data.hourlyRate),
+                    status: "todo",
+                  });
+                  taskForm.reset();
+                }, "Task created")
+              )}
               className="grid md:grid-cols-3 gap-2 bg-white/[0.02] p-3 rounded-xl"
             >
               <input {...taskForm.register("title", { required: true })} placeholder="Task title" className={inputCls} />
               <select {...taskForm.register("milestoneId", { required: true })} className={inputCls}>
                 {milestones.map((m) => (
                   <option key={m._id} value={m._id}>{m.title}</option>
+                ))}
+              </select>
+              <select {...taskForm.register("assigneeId")} className={inputCls} defaultValue="">
+                <option value="">Unassigned</option>
+                {assigneeCandidates.map((u) => (
+                  <option key={u._id} value={u._id}>
+                    {u.name}
+                  </option>
                 ))}
               </select>
               <select {...taskForm.register("priority")} className={inputCls}>
@@ -260,24 +402,72 @@ export default function ProjectDetail() {
                 <div className="space-y-2">
                   {tasks
                     .filter((t) => t.status === col.key)
-                    .map((t) => (
+                    .map((t) => {
+                      const assigneeId =
+                        typeof t.assigneeId === "object"
+                          ? t.assigneeId?._id
+                          : t.assigneeId;
+                      const assigneeName =
+                        typeof t.assigneeId === "object"
+                          ? t.assigneeId?.name
+                          : null;
+                      const canUpdateTask =
+                        canManage || assigneeId === user?._id;
+
+                      return (
                       <div key={t._id} className="p-3 bg-white/[0.03] border border-white/[0.06] rounded-lg">
                         <div className="text-sm font-medium">{t.title}</div>
-                        <div className="text-[10px] text-white/40">{t.priority}</div>
+                        <div className="text-[10px] text-white/40">
+                          {t.priority}
+                          {assigneeName ? ` · ${assigneeName}` : " · Unassigned"}
+                        </div>
+                        {canManage && (
+                          <select
+                            className="mt-2 text-xs bg-transparent border border-white/10 rounded p-1 w-full"
+                            value={assigneeId ?? ""}
+                            onChange={async (e) => {
+                              clearFeedback();
+                              try {
+                                await tasksApi.update(id, t._id, {
+                                  assigneeId: e.target.value || null,
+                                });
+                                await load();
+                              } catch (err: unknown) {
+                                setActionError(getErrorMessage(err));
+                              }
+                            }}
+                          >
+                            <option value="">Unassigned</option>
+                            {assigneeCandidates.map((u) => (
+                              <option key={u._id} value={u._id}>
+                                {u.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {canUpdateTask ? (
                         <select
                           className="mt-2 text-xs bg-transparent border border-white/10 rounded p-1"
                           value={t.status}
                           onChange={async (e) => {
-                            await tasksApi.update(id, t._id, { status: e.target.value });
-                            load();
+                            clearFeedback();
+                            try {
+                              await tasksApi.update(id, t._id, { status: e.target.value });
+                              await load();
+                            } catch (err: unknown) {
+                              setActionError(getErrorMessage(err));
+                            }
                           }}
                         >
                           <option value="todo">todo</option>
                           <option value="in_progress">in_progress</option>
                           <option value="done">done</option>
                         </select>
+                        ) : (
+                          <div className="mt-2 text-[10px] text-white/30 capitalize">{t.status.replace("_", " ")}</div>
+                        )}
                       </div>
-                    ))}
+                    );})}
                 </div>
               </div>
             ))}
@@ -291,23 +481,64 @@ export default function ProjectDetail() {
             <div className="text-xs text-white/40">Project Manager</div>
             <div>{pmName}</div>
           </div>
-          {canManage && (
+
+          {isAdmin && (
             <form
-              onSubmit={memberForm.handleSubmit(async (data) => {
-                await projectsApi.addMember(id, data.userId);
-                memberForm.reset();
-                setMsg("Member added");
-                load();
-              })}
-              className="flex gap-2"
+              onSubmit={changePmForm.handleSubmit((data) =>
+                runAction(async () => {
+                  await projectsApi.changeManager(id, data.projectManagerId);
+                  changePmForm.reset();
+                }, "Project manager updated")
+              )}
+              className="flex flex-col gap-2 bg-white/[0.02] border border-white/[0.06] p-3 rounded-xl"
             >
-              <select {...memberForm.register("userId", { required: true })} className={inputCls}>
-                <option value="">Add member…</option>
-                {orgUsers.map((u) => (
-                  <option key={u._id} value={u._id}>{u.name} ({u.orgRole})</option>
-                ))}
-              </select>
-              <button className="px-3 py-2 bg-purple-600 rounded text-sm">Add</button>
+              <div className="text-xs text-white/40">
+                Assign or replace project manager (one per project)
+              </div>
+              <div className="flex gap-2">
+                <select
+                  {...changePmForm.register("projectManagerId", { required: true })}
+                  className={inputCls}
+                  defaultValue={pmId}
+                >
+                  <option value="">Select project manager…</option>
+                  {pmCandidates.map((u) => (
+                    <option key={u._id} value={u._id}>
+                      {u.name} ({u.email})
+                    </option>
+                  ))}
+                </select>
+                <button type="submit" className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0">
+                  {pmId ? "Change PM" : "Assign PM"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {isAdmin && (
+            <form
+              onSubmit={memberForm.handleSubmit((data) =>
+                runAction(async () => {
+                  await projectsApi.addMember(id, data.userId);
+                  memberForm.reset();
+                }, "Member added")
+              )}
+              className="flex flex-col gap-2"
+            >
+              <div className="text-xs text-white/40">Add team member (admin only, teamMember role)</div>
+              <div className="flex gap-2">
+                <select {...memberForm.register("userId", { required: true })} className={inputCls}>
+                  <option value="">Select team member…</option>
+                  {teamMemberCandidates.map((u) => (
+                    <option key={u._id} value={u._id}>
+                      {u.name} ({u.email})
+                    </option>
+                  ))}
+                </select>
+                <button type="submit" className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0">
+                  Add
+                </button>
+              </div>
             </form>
           )}
           {members.map((m) => {
@@ -318,15 +549,17 @@ export default function ProjectDetail() {
                   <div>{u?.name ?? m.userId}</div>
                   <div className="text-xs text-white/40">{m.projectRole}</div>
                 </div>
-                {canManage && u && (
+                {isAdmin && u && (
                   <div className="flex gap-2">
                     {m.projectRole === "teamMember" && (
                       <button
                         className="text-xs text-purple-300"
-                        onClick={async () => {
-                          await projectsApi.promoteLead(id, u._id);
-                          load();
-                        }}
+                        onClick={() =>
+                          runAction(
+                            () => projectsApi.promoteLead(id, u._id).then(() => {}),
+                            "Member promoted to team lead"
+                          )
+                        }
                       >
                         Promote lead
                       </button>
@@ -334,20 +567,24 @@ export default function ProjectDetail() {
                     {m.projectRole === "teamLead" && (
                       <button
                         className="text-xs text-purple-300"
-                        onClick={async () => {
-                          await projectsApi.demoteLead(id, u._id);
-                          load();
-                        }}
+                        onClick={() =>
+                          runAction(
+                            () => projectsApi.demoteLead(id, u._id).then(() => {}),
+                            "Team lead demoted"
+                          )
+                        }
                       >
                         Demote
                       </button>
                     )}
                     <button
                       className="text-xs text-red-400"
-                      onClick={async () => {
-                        await projectsApi.removeMember(id, u._id);
-                        load();
-                      }}
+                      onClick={() =>
+                        runAction(
+                          () => projectsApi.removeMember(id, u._id).then(() => {}),
+                          "Member removed"
+                        )
+                      }
                     >
                       Remove
                     </button>
@@ -361,7 +598,7 @@ export default function ProjectDetail() {
 
       {tab === "estimate" && (
         <div className="space-y-3">
-          {!canBudget ? (
+          {!canManage ? (
             <p className="text-sm text-white/40">Estimate access: admin & PM only.</p>
           ) : (
             <>
@@ -386,15 +623,15 @@ export default function ProjectDetail() {
                 </div>
               )}
               <form
-                onSubmit={estimateForm.handleSubmit(async (data) => {
-                  await estimatesApi.upsert(id, {
-                    contingencyPercent: Number(data.contingencyPercent),
-                    notes: data.notes,
-                    lineItems: summary?.lineItems ?? [],
-                  });
-                  setMsg("Estimate saved");
-                  load();
-                })}
+                onSubmit={estimateForm.handleSubmit((data) =>
+                  runAction(async () => {
+                    await estimatesApi.upsert(id, {
+                      contingencyPercent: Number(data.contingencyPercent),
+                      notes: data.notes,
+                      lineItems: summary?.lineItems ?? [],
+                    });
+                  }, "Estimate saved")
+                )}
                 className="flex gap-2 items-end"
               >
                 <label className="text-xs text-white/40">
@@ -411,19 +648,19 @@ export default function ProjectDetail() {
 
       {tab === "budget" && (
         <div className="space-y-3">
-          {!canBudget ? (
+          {!canManage ? (
             <p className="text-sm text-white/40">Budget access: admin & PM only.</p>
           ) : (
             <>
               <form
-                onSubmit={budgetForm.handleSubmit(async (data) => {
-                  await budgetApi.upsert(id, {
-                    allocatedAmount: Number(data.allocatedAmount),
-                    currency: project.currency,
-                  });
-                  setMsg("Budget saved");
-                  load();
-                })}
+                onSubmit={budgetForm.handleSubmit((data) =>
+                  runAction(async () => {
+                    await budgetApi.upsert(id, {
+                      allocatedAmount: Number(data.allocatedAmount),
+                      currency: project.currency,
+                    });
+                  }, "Budget saved")
+                )}
                 className="flex gap-2"
               >
                 <input type="number" {...budgetForm.register("allocatedAmount")} placeholder="Allocated amount" className={inputCls} defaultValue={budget?.allocatedAmount} />
@@ -446,15 +683,15 @@ export default function ProjectDetail() {
                 </div>
               )}
               <form
-                onSubmit={expenseForm.handleSubmit(async (data) => {
-                  await budgetApi.addExpense(id, {
-                    ...data,
-                    amount: Number(data.amount),
-                  });
-                  expenseForm.reset();
-                  setMsg("Expense added");
-                  load();
-                })}
+                onSubmit={expenseForm.handleSubmit((data) =>
+                  runAction(async () => {
+                    await budgetApi.addExpense(id, {
+                      ...data,
+                      amount: Number(data.amount),
+                    });
+                    expenseForm.reset();
+                  }, "Expense added")
+                )}
                 className="grid md:grid-cols-4 gap-2"
               >
                 <input type="date" {...expenseForm.register("date", { required: true })} className={inputCls} />
@@ -470,12 +707,12 @@ export default function ProjectDetail() {
       {tab === "reports" && (
         <div className="space-y-3">
           <form
-            onSubmit={reportForm.handleSubmit(async (data) => {
-              await reportsApi.create(id, data);
-              reportForm.reset();
-              setMsg("Report submitted");
-              load();
-            })}
+            onSubmit={reportForm.handleSubmit((data) =>
+              runAction(async () => {
+                await reportsApi.create(id, data);
+                reportForm.reset();
+              }, "Report submitted")
+            )}
             className="grid md:grid-cols-3 gap-2 bg-white/[0.02] p-3 rounded-xl"
           >
             <input type="date" {...reportForm.register("periodStart", { required: true })} className={inputCls} />
@@ -496,13 +733,23 @@ export default function ProjectDetail() {
               <div className="flex gap-2">
                 <button
                   className="text-xs text-purple-300"
-                  onClick={() => reportsApi.export(id, r._id, "pdf")}
+                  onClick={() => {
+                    clearFeedback();
+                    reportsApi.export(id, r._id, "pdf").catch((e) =>
+                      setActionError(getErrorMessage(e))
+                    );
+                  }}
                 >
                   PDF
                 </button>
                 <button
                   className="text-xs text-purple-300"
-                  onClick={() => reportsApi.export(id, r._id, "excel")}
+                  onClick={() => {
+                    clearFeedback();
+                    reportsApi.export(id, r._id, "excel").catch((e) =>
+                      setActionError(getErrorMessage(e))
+                    );
+                  }}
                 >
                   Excel
                 </button>

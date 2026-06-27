@@ -116,7 +116,6 @@ export const usersApi = {
     name: string;
     email: string;
     password: string;
-    orgRole: string;
   }) =>
     request<{ user: User & { devOtp?: string; emailDelivered?: boolean } }>(
       "/api/users",

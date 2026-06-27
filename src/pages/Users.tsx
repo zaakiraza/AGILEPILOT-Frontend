@@ -10,8 +10,13 @@ type CreateForm = {
   name: string;
   email: string;
   password: string;
-  orgRole: string;
 };
+
+function orgRoleLabel(role: User["orgRole"]) {
+  if (role === "admin") return "Admin";
+  if (role === "superAdmin") return "Super Admin";
+  return "Member";
+}
 
 export default function UsersPage() {
   const { user: actor } = useAuth();
@@ -23,19 +28,8 @@ export default function UsersPage() {
   const [users, setUsers] = React.useState<User[]>([]);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const { register, handleSubmit, reset } = useForm<CreateForm>({
-    defaultValues: {
-      orgRole: actor?.orgRole === "superAdmin" ? "admin" : "projectManager",
-    },
-  });
-
-  const roleOptions =
-    actor?.orgRole === "superAdmin"
-      ? [{ value: "admin", label: "Admin" }]
-      : [
-          { value: "projectManager", label: "Project Manager" },
-          { value: "teamMember", label: "Team Member" },
-        ];
+  const isSuperAdmin = actor?.orgRole === "superAdmin";
+  const { register, handleSubmit, reset } = useForm<CreateForm>();
 
   async function load() {
     try {
@@ -60,7 +54,7 @@ export default function UsersPage() {
           ? " (OTP logged on server if SMTP not configured)"
           : "";
       setMessage(`User created. Verification email sent.${otpNote}`);
-      reset({ ...data, name: "", email: "", password: "" });
+      reset();
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Create failed");
@@ -79,13 +73,13 @@ export default function UsersPage() {
         <input {...register("name", { required: true })} placeholder="Name" className={inputCls} />
         <input {...register("email", { required: true })} type="email" placeholder="Email" className={inputCls} />
         <input {...register("password", { required: true, minLength: 8 })} type="password" placeholder="Password" className={inputCls} />
-        <select {...register("orgRole")} className={inputCls}>
-          {roleOptions.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        {isSuperAdmin ? (
+          <p className="text-xs text-white/40">Creates an organization admin account.</p>
+        ) : (
+          <p className="text-xs text-white/40">
+            Creates an organization member. Assign project manager, team lead, or team member per project.
+          </p>
+        )}
         {error && <div className="text-xs text-red-400">{error}</div>}
         {message && <div className="text-xs text-emerald-400">{message}</div>}
         <button className="px-3 py-2 bg-purple-600 rounded text-white text-sm">Create user</button>
@@ -97,7 +91,7 @@ export default function UsersPage() {
             <tr>
               <th className="p-3">Name</th>
               <th className="p-3">Email</th>
-              <th className="p-3">Role</th>
+              <th className="p-3">Account type</th>
               <th className="p-3">Verified</th>
             </tr>
           </thead>
@@ -106,7 +100,7 @@ export default function UsersPage() {
               <tr key={u._id} className="border-b border-white/[0.04]">
                 <td className="p-3">{u.name}</td>
                 <td className="p-3 text-white/60">{u.email}</td>
-                <td className="p-3">{u.orgRole}</td>
+                <td className="p-3">{orgRoleLabel(u.orgRole)}</td>
                 <td className="p-3">
                   {u.isEmailVerified === false ? (
                     <span className="text-amber-400">Pending</span>

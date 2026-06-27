@@ -26,7 +26,15 @@ export default function Projects() {
     usersApi
       .list()
       .then((list) =>
-        setPms(list.filter((u) => u.orgRole === "projectManager" && u.isActive))
+        setPms(
+          list.filter(
+            (u) =>
+              u.isActive !== false &&
+              (u.orgRole === "member" ||
+                u.orgRole === "teamMember" ||
+                u.orgRole === "projectManager")
+          )
+        )
       )
       .catch(() => {});
   }, [isAdmin]);

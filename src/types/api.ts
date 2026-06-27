@@ -2,7 +2,7 @@ export interface User {
   _id: string;
   name: string;
   email: string;
-  orgRole: "superAdmin" | "admin" | "projectManager" | "teamMember";
+  orgRole: "superAdmin" | "admin" | "member";
   organizationId?: string | null;
   isActive: boolean;
   isEmailVerified?: boolean;
@@ -28,7 +28,7 @@ export interface Project {
   startDate?: string;
   endDate?: string;
   organizationId: string;
-  projectManagerId: User | string;
+  projectManagerId?: User | string | null;
   createdAt?: string;
 }
 
@@ -36,7 +36,7 @@ export interface ProjectMember {
   _id: string;
   projectId: string;
   userId: User | string;
-  projectRole: "teamLead" | "teamMember";
+  projectRole: "projectManager" | "teamLead" | "teamMember";
 }
 
 export interface Milestone {
