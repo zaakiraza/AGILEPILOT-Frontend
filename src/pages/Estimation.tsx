@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { estimatesApi } from "../services/api";
 import { useProjects } from "../hooks/useProjects";
 import { ProjectPicker, inputCls } from "../components/ProjectPicker";
+import { LoadingButton } from "../components/LoadingButton";
 import type { EstimateSummary } from "../types/api";
 
 export default function Estimation() {
@@ -13,6 +14,7 @@ export default function Estimation() {
   const [error, setError] = React.useState<string | null>(null);
   const [contingency, setContingency] = React.useState(10);
   const [notes, setNotes] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -32,13 +34,18 @@ export default function Estimation() {
 
   async function save() {
     if (!projectId) return;
-    await estimatesApi.upsert(projectId, {
-      contingencyPercent: contingency,
-      notes,
-      lineItems: summary?.lineItems ?? [],
-    });
-    const s = await estimatesApi.summary(projectId);
-    setSummary(s);
+    setSaving(true);
+    try {
+      await estimatesApi.upsert(projectId, {
+        contingencyPercent: contingency,
+        notes,
+        lineItems: summary?.lineItems ?? [],
+      });
+      const s = await estimatesApi.summary(projectId);
+      setSummary(s);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -106,12 +113,13 @@ export default function Estimation() {
           placeholder="Notes"
           className={inputCls + " flex-1 min-w-[200px]"}
         />
-        <button
+        <LoadingButton
           onClick={save}
+          loading={saving}
           className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded text-white text-sm"
         >
           Save estimate
-        </button>
+        </LoadingButton>
       </div>
     </div>
   );

@@ -3,7 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { reportsApi } from "../services/api";
 import { useProjects } from "../hooks/useProjects";
+import { useBusyAction } from "../hooks/useBusyAction";
 import { ProjectPicker, inputCls } from "../components/ProjectPicker";
+import { LoadingButton } from "../components/LoadingButton";
 import type { ProgressReport } from "../types/api";
 
 export default function Reports() {
@@ -11,6 +13,8 @@ export default function Reports() {
   const [params, setParams] = useSearchParams();
   const projectId = params.get("project") ?? projects[0]?._id ?? "";
   const [reports, setReports] = React.useState<ProgressReport[]>([]);
+  const [submitting, setSubmitting] = React.useState(false);
+  const { run, isBusy } = useBusyAction();
   const { register, handleSubmit, reset } = useForm<{
     periodStart: string;
     periodEnd: string;
@@ -41,18 +45,27 @@ export default function Reports() {
       <form
         onSubmit={handleSubmit(async (data) => {
           if (!projectId) return;
-          await reportsApi.create(projectId, data);
-          reset();
-          load();
+          setSubmitting(true);
+          try {
+            await reportsApi.create(projectId, data);
+            reset();
+            await load();
+          } finally {
+            setSubmitting(false);
+          }
         })}
         className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl grid md:grid-cols-3 gap-2"
       >
         <input type="date" {...register("periodStart", { required: true })} className={inputCls} />
         <input type="date" {...register("periodEnd", { required: true })} className={inputCls} />
         <input {...register("manualNotes")} placeholder="Manual notes" className={inputCls} />
-        <button className="px-3 py-2 bg-purple-600 rounded text-sm text-white md:col-span-3 w-fit">
+        <LoadingButton
+          type="submit"
+          loading={submitting}
+          className="px-3 py-2 bg-purple-600 rounded text-sm text-white md:col-span-3 w-fit"
+        >
           Submit report
-        </button>
+        </LoadingButton>
       </form>
 
       <div className="space-y-2">
@@ -72,18 +85,24 @@ export default function Reports() {
             </div>
             {projectId && (
               <div className="flex flex-col gap-1 shrink-0">
-                <button
-                  className="text-xs text-purple-300 hover:underline"
-                  onClick={() => reportsApi.export(projectId, r._id, "pdf")}
+                <LoadingButton
+                  loading={isBusy(`pdf-${r._id}`)}
+                  className="text-xs text-purple-300 hover:underline bg-transparent p-0 justify-start"
+                  onClick={() =>
+                    run(`pdf-${r._id}`, () => reportsApi.export(projectId, r._id, "pdf"))
+                  }
                 >
                   Download PDF
-                </button>
-                <button
-                  className="text-xs text-purple-300 hover:underline"
-                  onClick={() => reportsApi.export(projectId, r._id, "excel")}
+                </LoadingButton>
+                <LoadingButton
+                  loading={isBusy(`excel-${r._id}`)}
+                  className="text-xs text-purple-300 hover:underline bg-transparent p-0 justify-start"
+                  onClick={() =>
+                    run(`excel-${r._id}`, () => reportsApi.export(projectId, r._id, "excel"))
+                  }
                 >
                   Download Excel
-                </button>
+                </LoadingButton>
               </div>
             )}
           </div>

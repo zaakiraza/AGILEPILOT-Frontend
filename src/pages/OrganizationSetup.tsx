@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { orgApi } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { inputCls } from "../components/ProjectPicker";
+import { LoadingButton } from "../components/LoadingButton";
 
 type Form = { name: string; slug?: string; defaultCurrency?: string };
 
@@ -12,9 +13,11 @@ export default function OrganizationSetup() {
   const navigate = useNavigate();
   const { refreshUser } = useAuth();
   const [error, setError] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(false);
 
   async function onSubmit(data: Form) {
     setError(null);
+    setLoading(true);
     try {
       await orgApi.create({
         name: data.name,
@@ -25,6 +28,8 @@ export default function OrganizationSetup() {
       navigate("/dashboard");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not create organization");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -48,9 +53,13 @@ export default function OrganizationSetup() {
             className={inputCls}
           />
           {error && <div className="text-xs text-red-400">{error}</div>}
-          <button className="w-full py-2 bg-purple-600 rounded text-white font-medium">
+          <LoadingButton
+            type="submit"
+            loading={loading}
+            className="w-full py-2 bg-purple-600 rounded text-white font-medium"
+          >
             Create organization
-          </button>
+          </LoadingButton>
         </form>
       </div>
     </div>

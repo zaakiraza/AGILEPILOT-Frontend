@@ -2,6 +2,7 @@ import React from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { useAuth } from "../context/AuthContext";
+import { LoadingButton } from "../components/LoadingButton";
 
 type Form = { email: string; password: string };
 
@@ -54,12 +55,13 @@ export default function Login() {
             className="w-full p-2 bg-white/[0.02] border border-white/[0.06] rounded text-sm"
           />
           {error && <div className="text-xs text-red-400">{error}</div>}
-          <button
-            disabled={loading}
-            className="w-full py-2 bg-purple-600 rounded text-white font-medium disabled:opacity-50"
+          <LoadingButton
+            type="submit"
+            loading={loading}
+            className="w-full py-2 bg-purple-600 rounded text-white font-medium"
           >
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
+            Sign in
+          </LoadingButton>
         </form>
 
         <div className="mt-4 text-sm text-white/40 space-y-1">

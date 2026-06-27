@@ -2,12 +2,14 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { orgApi } from "../services/api";
+import { LoadingButton } from "../components/LoadingButton";
 import type { Organization } from "../types/api";
 
 export default function Settings() {
   const { user, refreshUser } = useAuth();
   const [org, setOrg] = React.useState<Organization | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
 
   React.useEffect(() => {
     if (user?.orgRole === "admin" && user.organizationId) {
@@ -31,12 +33,20 @@ export default function Settings() {
           Email verified:{" "}
           {user?.isEmailVerified === false ? "No" : "Yes"}
         </div>
-        <button
-          onClick={() => refreshUser()}
+        <LoadingButton
+          loading={refreshing}
+          onClick={async () => {
+            setRefreshing(true);
+            try {
+              await refreshUser();
+            } finally {
+              setRefreshing(false);
+            }
+          }}
           className="mt-3 text-xs px-3 py-1 bg-white/[0.04] rounded"
         >
           Refresh profile
-        </button>
+        </LoadingButton>
       </div>
 
       {user?.orgRole === "admin" && org && (

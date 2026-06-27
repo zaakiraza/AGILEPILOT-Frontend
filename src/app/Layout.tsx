@@ -12,15 +12,22 @@ import {
   TrendingDown,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { LoadingButton } from "../components/LoadingButton";
 
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const [loggingOut, setLoggingOut] = React.useState(false);
 
-  function handleLogout() {
-    logout();
-    navigate("/login");
+  async function handleLogout() {
+    setLoggingOut(true);
+    try {
+      logout();
+      navigate("/login");
+    } finally {
+      setLoggingOut(false);
+    }
   }
 
   const nav = [
@@ -74,12 +81,13 @@ export default function Layout() {
               <div className="text-sm font-medium truncate">{user?.name}</div>
               <div className="text-[11px] text-white/30">{user?.orgRole}</div>
             </div>
-            <button
+            <LoadingButton
+              loading={loggingOut}
               onClick={handleLogout}
               className="text-xs px-2 py-1 bg-white/[0.04] rounded text-white/70 hover:bg-white/[0.06] shrink-0"
             >
               Logout
-            </button>
+            </LoadingButton>
           </div>
         </div>
       </aside>

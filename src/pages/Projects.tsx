@@ -1,51 +1,87 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import { projectsApi, usersApi } from "../services/api";
+import { orgApi, projectsApi, usersApi } from "../services/api";
 import { useProjects } from "../hooks/useProjects";
 import { useAuth } from "../context/AuthContext";
 import { inputCls } from "../components/ProjectPicker";
-import type { User } from "../types/api";
+import { LoadingButton } from "../components/LoadingButton";
+import type { Organization, User } from "../types/api";
+
+function isAssignableMember(u: User) {
+  return (
+    u.isActive !== false &&
+    (u.orgRole === "member" ||
+      u.orgRole === "teamMember" ||
+      u.orgRole === "projectManager")
+  );
+}
 
 export default function Projects() {
   const { projects, loading, error, reload } = useProjects();
   const { user } = useAuth();
-  const { register, handleSubmit, reset } = useForm<{
+  const isAdmin = user?.orgRole === "admin";
+  const isSuperAdmin = user?.orgRole === "superAdmin";
+  const canCreateProject = isAdmin || isSuperAdmin;
+
+  const { register, handleSubmit, reset, watch } = useForm<{
     name: string;
     description?: string;
+    organizationId?: string;
     projectManagerId: string;
     currency?: string;
   }>();
   const navigate = useNavigate();
   const [pms, setPms] = React.useState<User[]>([]);
+  const [orgs, setOrgs] = React.useState<Organization[]>([]);
+  const [allUsers, setAllUsers] = React.useState<User[]>([]);
   const [formError, setFormError] = React.useState<string | null>(null);
-  const isAdmin = user?.orgRole === "admin";
+  const [creating, setCreating] = React.useState(false);
+
+  const selectedOrgId = watch("organizationId");
 
   React.useEffect(() => {
-    if (!isAdmin) return;
+    if (!canCreateProject) return;
+
+    if (isSuperAdmin) {
+      Promise.all([orgApi.list(), usersApi.list()])
+        .then(([orgList, userList]) => {
+          setOrgs(orgList);
+          setAllUsers(userList);
+        })
+        .catch(() => {});
+      return;
+    }
+
     usersApi
       .list()
-      .then((list) =>
-        setPms(
-          list.filter(
-            (u) =>
-              u.isActive !== false &&
-              (u.orgRole === "member" ||
-                u.orgRole === "teamMember" ||
-                u.orgRole === "projectManager")
-          )
-        )
-      )
+      .then((list) => setPms(list.filter(isAssignableMember)))
       .catch(() => {});
-  }, [isAdmin]);
+  }, [canCreateProject, isSuperAdmin]);
+
+  React.useEffect(() => {
+    if (!isSuperAdmin || !selectedOrgId) {
+      setPms([]);
+      return;
+    }
+    setPms(
+      allUsers.filter(
+        (u) =>
+          isAssignableMember(u) &&
+          u.organizationId?.toString() === selectedOrgId
+      )
+    );
+  }, [isSuperAdmin, selectedOrgId, allUsers]);
 
   async function onSubmit(data: {
     name: string;
     description?: string;
+    organizationId?: string;
     projectManagerId: string;
     currency?: string;
   }) {
     setFormError(null);
+    setCreating(true);
     try {
       const project = await projectsApi.create({
         name: data.name,
@@ -53,12 +89,17 @@ export default function Projects() {
         projectManagerId: data.projectManagerId,
         currency: data.currency || "USD",
         status: "planning",
+        ...(isSuperAdmin && data.organizationId
+          ? { organizationId: data.organizationId }
+          : {}),
       });
       reset();
       reload();
       navigate(`/projects/${project._id}`);
     } catch (e: unknown) {
       setFormError(e instanceof Error ? e.message : "Create failed");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -85,12 +126,22 @@ export default function Projects() {
         ))}
       </div>
 
-      {isAdmin && (
+      {canCreateProject && (
         <form
           onSubmit={handleSubmit(onSubmit)}
           className="max-w-lg bg-white/[0.02] border border-white/[0.04] p-4 rounded-xl space-y-2"
         >
           <h3 className="text-sm font-semibold">Create project</h3>
+          {isSuperAdmin && (
+            <select {...register("organizationId", { required: true })} className={inputCls}>
+              <option value="">Select organization…</option>
+              {orgs.map((o) => (
+                <option key={o._id} value={o._id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          )}
           <input {...register("name", { required: true })} placeholder="Project name" className={inputCls} />
           <input {...register("description")} placeholder="Description" className={inputCls} />
           <input {...register("currency")} placeholder="Currency (USD)" className={inputCls} />
@@ -103,7 +154,13 @@ export default function Projects() {
             ))}
           </select>
           {formError && <div className="text-xs text-red-400">{formError}</div>}
-          <button className="px-3 py-2 bg-purple-600 rounded text-white text-sm">Create project</button>
+          <LoadingButton
+            type="submit"
+            loading={creating}
+            className="px-3 py-2 bg-purple-600 rounded text-white text-sm"
+          >
+            Create project
+          </LoadingButton>
         </form>
       )}
     </div>

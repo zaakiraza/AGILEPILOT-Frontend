@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { usersApi } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { inputCls } from "../components/ProjectPicker";
+import { LoadingButton } from "../components/LoadingButton";
 import type { User } from "../types/api";
 
 type CreateForm = {
@@ -28,6 +29,7 @@ export default function UsersPage() {
   const [users, setUsers] = React.useState<User[]>([]);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [creating, setCreating] = React.useState(false);
   const isSuperAdmin = actor?.orgRole === "superAdmin";
   const { register, handleSubmit, reset } = useForm<CreateForm>();
 
@@ -46,6 +48,7 @@ export default function UsersPage() {
   async function onCreate(data: CreateForm) {
     setError(null);
     setMessage(null);
+    setCreating(true);
     try {
       const created = await usersApi.create(data);
       const otpNote = created.devOtp
@@ -58,6 +61,8 @@ export default function UsersPage() {
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Create failed");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -82,7 +87,13 @@ export default function UsersPage() {
         )}
         {error && <div className="text-xs text-red-400">{error}</div>}
         {message && <div className="text-xs text-emerald-400">{message}</div>}
-        <button className="px-3 py-2 bg-purple-600 rounded text-white text-sm">Create user</button>
+        <LoadingButton
+          type="submit"
+          loading={creating}
+          className="px-3 py-2 bg-purple-600 rounded text-white text-sm"
+        >
+          Create user
+        </LoadingButton>
       </form>
 
       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">

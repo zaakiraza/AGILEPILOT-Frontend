@@ -2,6 +2,7 @@ import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { authApi } from "../services/api";
+import { LoadingButton } from "../components/LoadingButton";
 
 type Form = { email: string; otp: string };
 
@@ -15,6 +16,7 @@ export default function VerifyEmail() {
   const [error, setError] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [resendLoading, setResendLoading] = React.useState(false);
 
   async function onSubmit(data: Form) {
     setError(null);
@@ -33,6 +35,7 @@ export default function VerifyEmail() {
   async function resend() {
     setError(null);
     setMessage(null);
+    setResendLoading(true);
     try {
       const result = await authApi.resendOtp(getValues("email"));
       setMessage(
@@ -42,6 +45,8 @@ export default function VerifyEmail() {
       );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not resend");
+    } finally {
+      setResendLoading(false);
     }
   }
 
@@ -67,20 +72,22 @@ export default function VerifyEmail() {
           />
           {error && <div className="text-xs text-red-400">{error}</div>}
           {message && <div className="text-xs text-emerald-400">{message}</div>}
-          <button
-            disabled={loading}
+          <LoadingButton
+            type="submit"
+            loading={loading}
             className="w-full py-2 bg-purple-600 rounded text-white font-medium"
           >
             Verify
-          </button>
+          </LoadingButton>
         </form>
-        <button
+        <LoadingButton
           type="button"
+          loading={resendLoading}
           onClick={resend}
-          className="text-sm text-purple-300 hover:underline"
+          className="text-sm text-purple-300 hover:underline bg-transparent p-0 disabled:opacity-50"
         >
           Resend code
-        </button>
+        </LoadingButton>
         <div className="text-sm text-white/40">
           <Link to="/login" className="text-purple-300">
             Back to login

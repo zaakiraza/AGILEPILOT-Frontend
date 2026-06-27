@@ -12,6 +12,8 @@ import {
 } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { inputCls } from "../components/ProjectPicker";
+import { LoadingButton } from "../components/LoadingButton";
+import { useBusyAction } from "../hooks/useBusyAction";
 import { getErrorMessage } from "../utils/errors";
 import type {
   Budget,
@@ -56,8 +58,12 @@ export default function ProjectDetail() {
   const [error, setError] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
+  const [actionLoading, setActionLoading] = React.useState(false);
+  const { run: runBusy, isBusy } = useBusyAction();
 
   const isAdmin = user?.orgRole === "admin";
+  const isSuperAdmin = user?.orgRole === "superAdmin";
+  const isPlatformAdmin = isAdmin || isSuperAdmin;
 
   function clearFeedback() {
     setMsg(null);
@@ -66,12 +72,15 @@ export default function ProjectDetail() {
 
   async function runAction(action: () => Promise<void>, successMessage: string) {
     clearFeedback();
+    setActionLoading(true);
     try {
       await action();
       setMsg(successMessage);
       await load();
     } catch (e: unknown) {
       setActionError(getErrorMessage(e));
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -83,7 +92,7 @@ export default function ProjectDetail() {
 
   function canManageProject(project: Project | null): boolean {
     if (!user || !project) return false;
-    return isAdmin || user._id === projectManagerId(project);
+    return isPlatformAdmin || user._id === projectManagerId(project);
   }
 
   async function load() {
@@ -138,10 +147,19 @@ export default function ProjectDetail() {
         setAnalysis(null);
       }
 
-      if (isAdmin) {
+      if (isPlatformAdmin) {
         usersApi
           .list()
-          .then((list) => setOrgUsers(list.filter((u) => u.orgRole !== "superAdmin")))
+          .then((list) => {
+            const orgId = p.organizationId?.toString();
+            setOrgUsers(
+              list.filter(
+                (u) =>
+                  u.orgRole !== "superAdmin" &&
+                  (!isSuperAdmin || !orgId || u.organizationId?.toString() === orgId)
+              )
+            );
+          })
           .catch(() => {});
       }
     } catch (e: unknown) {
@@ -186,21 +204,21 @@ export default function ProjectDetail() {
 
   React.useEffect(() => {
     if (!project) return;
-    const manage = isAdmin || user?._id === projectManagerId(project);
-    const teamMemberOnProject = !isAdmin && !manage && !canViewMembers;
+    const manage = isPlatformAdmin || user?._id === projectManagerId(project);
+    const teamMemberOnProject = !isPlatformAdmin && !manage && !canViewMembers;
 
     if (!canViewMembers && tab === "members") {
       setTab("overview");
       return;
     }
-    if ((!manage && !isAdmin) && (tab === "estimate" || tab === "budget")) {
+    if (!manage && !isPlatformAdmin && (tab === "estimate" || tab === "budget")) {
       setTab("overview");
       return;
     }
     if (teamMemberOnProject && tab === "reports") {
       setTab("overview");
     }
-  }, [canViewMembers, tab, project, isAdmin, user?._id]);
+  }, [canViewMembers, tab, project, isPlatformAdmin, user?._id]);
 
   if (!id) return null;
   if (loading) {
@@ -215,7 +233,7 @@ export default function ProjectDetail() {
 
   const pmId = projectManagerId(project);
   const canManage = canManageProject(project);
-  const isTeamMemberOnProject = !isAdmin && !canManage && !canViewMembers;
+  const isTeamMemberOnProject = !isPlatformAdmin && !canManage && !canViewMembers;
 
   const visibleTabs = TABS.filter((t) => {
     if (t === "members" && !canViewMembers) return false;
@@ -341,7 +359,13 @@ export default function ProjectDetail() {
             >
               <input {...milestoneForm.register("title", { required: true })} placeholder="Title" className={inputCls + " max-w-xs"} />
               <input {...milestoneForm.register("description")} placeholder="Description" className={inputCls + " max-w-xs"} />
-              <button className="px-3 py-2 bg-purple-600 rounded text-sm">Add milestone</button>
+              <LoadingButton
+                type="submit"
+                loading={actionLoading}
+                className="px-3 py-2 bg-purple-600 rounded text-sm"
+              >
+                Add milestone
+              </LoadingButton>
             </form>
           )}
           {milestones.map((m) => (
@@ -392,7 +416,13 @@ export default function ProjectDetail() {
               </select>
               <input type="number" {...taskForm.register("estimatedHours")} placeholder="Est. hours" className={inputCls} />
               <input type="number" {...taskForm.register("hourlyRate")} placeholder="Hourly rate" className={inputCls} />
-              <button className="px-3 py-2 bg-purple-600 rounded text-sm">Add task</button>
+              <LoadingButton
+                type="submit"
+                loading={actionLoading}
+                className="px-3 py-2 bg-purple-600 rounded text-sm"
+              >
+                Add task
+              </LoadingButton>
             </form>
           )}
           <div className="grid md:grid-cols-3 gap-3">
@@ -482,7 +512,7 @@ export default function ProjectDetail() {
             <div>{pmName}</div>
           </div>
 
-          {isAdmin && (
+          {isPlatformAdmin && (
             <form
               onSubmit={changePmForm.handleSubmit((data) =>
                 runAction(async () => {
@@ -508,14 +538,18 @@ export default function ProjectDetail() {
                     </option>
                   ))}
                 </select>
-                <button type="submit" className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0">
+                <LoadingButton
+                  type="submit"
+                  loading={actionLoading}
+                  className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0"
+                >
                   {pmId ? "Change PM" : "Assign PM"}
-                </button>
+                </LoadingButton>
               </div>
             </form>
           )}
 
-          {isAdmin && (
+          {isPlatformAdmin && (
             <form
               onSubmit={memberForm.handleSubmit((data) =>
                 runAction(async () => {
@@ -535,9 +569,13 @@ export default function ProjectDetail() {
                     </option>
                   ))}
                 </select>
-                <button type="submit" className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0">
+                <LoadingButton
+                  type="submit"
+                  loading={actionLoading}
+                  className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0"
+                >
                   Add
-                </button>
+                </LoadingButton>
               </div>
             </form>
           )}
@@ -549,45 +587,48 @@ export default function ProjectDetail() {
                   <div>{u?.name ?? m.userId}</div>
                   <div className="text-xs text-white/40">{m.projectRole}</div>
                 </div>
-                {isAdmin && u && (
+                {isPlatformAdmin && u && (
                   <div className="flex gap-2">
                     {m.projectRole === "teamMember" && (
-                      <button
-                        className="text-xs text-purple-300"
+                      <LoadingButton
+                        loading={actionLoading}
+                        className="text-xs text-purple-300 bg-transparent p-0"
                         onClick={() =>
                           runAction(
-                            () => projectsApi.promoteLead(id, u._id).then(() => {}),
+                            () => projectsApi.promoteLead(id!, u._id).then(() => {}),
                             "Member promoted to team lead"
                           )
                         }
                       >
                         Promote lead
-                      </button>
+                      </LoadingButton>
                     )}
                     {m.projectRole === "teamLead" && (
-                      <button
-                        className="text-xs text-purple-300"
+                      <LoadingButton
+                        loading={actionLoading}
+                        className="text-xs text-purple-300 bg-transparent p-0"
                         onClick={() =>
                           runAction(
-                            () => projectsApi.demoteLead(id, u._id).then(() => {}),
+                            () => projectsApi.demoteLead(id!, u._id).then(() => {}),
                             "Team lead demoted"
                           )
                         }
                       >
                         Demote
-                      </button>
+                      </LoadingButton>
                     )}
-                    <button
-                      className="text-xs text-red-400"
+                    <LoadingButton
+                      loading={actionLoading}
+                      className="text-xs text-red-400 bg-transparent p-0"
                       onClick={() =>
                         runAction(
-                          () => projectsApi.removeMember(id, u._id).then(() => {}),
+                          () => projectsApi.removeMember(id!, u._id).then(() => {}),
                           "Member removed"
                         )
                       }
                     >
                       Remove
-                    </button>
+                    </LoadingButton>
                   </div>
                 )}
               </div>
@@ -639,7 +680,13 @@ export default function ProjectDetail() {
                   <input type="number" {...estimateForm.register("contingencyPercent")} className={inputCls} defaultValue={summary?.contingencyPercent ?? 10} />
                 </label>
                 <input {...estimateForm.register("notes")} placeholder="Notes" className={inputCls} />
-                <button className="px-3 py-2 bg-purple-600 rounded text-sm">Save estimate</button>
+                <LoadingButton
+                  type="submit"
+                  loading={actionLoading}
+                  className="px-3 py-2 bg-purple-600 rounded text-sm"
+                >
+                  Save estimate
+                </LoadingButton>
               </form>
             </>
           )}
@@ -664,7 +711,13 @@ export default function ProjectDetail() {
                 className="flex gap-2"
               >
                 <input type="number" {...budgetForm.register("allocatedAmount")} placeholder="Allocated amount" className={inputCls} defaultValue={budget?.allocatedAmount} />
-                <button className="px-3 py-2 bg-purple-600 rounded text-sm">Set budget</button>
+                <LoadingButton
+                  type="submit"
+                  loading={actionLoading}
+                  className="px-3 py-2 bg-purple-600 rounded text-sm"
+                >
+                  Set budget
+                </LoadingButton>
               </form>
               {analysis && (
                 <div className="grid md:grid-cols-3 gap-3">
@@ -697,7 +750,13 @@ export default function ProjectDetail() {
                 <input type="date" {...expenseForm.register("date", { required: true })} className={inputCls} />
                 <input {...expenseForm.register("category", { required: true })} placeholder="Category" className={inputCls} />
                 <input type="number" {...expenseForm.register("amount", { required: true })} placeholder="Amount" className={inputCls} />
-                <button className="px-3 py-2 bg-purple-600 rounded text-sm">Add expense</button>
+                <LoadingButton
+                  type="submit"
+                  loading={actionLoading}
+                  className="px-3 py-2 bg-purple-600 rounded text-sm"
+                >
+                  Add expense
+                </LoadingButton>
               </form>
             </>
           )}
@@ -718,7 +777,13 @@ export default function ProjectDetail() {
             <input type="date" {...reportForm.register("periodStart", { required: true })} className={inputCls} />
             <input type="date" {...reportForm.register("periodEnd", { required: true })} className={inputCls} />
             <input {...reportForm.register("manualNotes")} placeholder="Notes" className={inputCls} />
-            <button className="px-3 py-2 bg-purple-600 rounded text-sm">Submit report</button>
+            <LoadingButton
+              type="submit"
+              loading={actionLoading}
+              className="px-3 py-2 bg-purple-600 rounded text-sm"
+            >
+              Submit report
+            </LoadingButton>
           </form>
           {reports.map((r) => (
             <div key={r._id} className="p-3 border border-white/[0.06] rounded-lg flex justify-between">
@@ -731,28 +796,30 @@ export default function ProjectDetail() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <button
-                  className="text-xs text-purple-300"
+                <LoadingButton
+                  loading={isBusy(`pdf-${r._id}`)}
+                  className="text-xs text-purple-300 bg-transparent p-0"
                   onClick={() => {
                     clearFeedback();
-                    reportsApi.export(id, r._id, "pdf").catch((e) =>
-                      setActionError(getErrorMessage(e))
-                    );
+                    runBusy(`pdf-${r._id}`, () =>
+                      reportsApi.export(id!, r._id, "pdf")
+                    ).catch((e) => setActionError(getErrorMessage(e)));
                   }}
                 >
                   PDF
-                </button>
-                <button
-                  className="text-xs text-purple-300"
+                </LoadingButton>
+                <LoadingButton
+                  loading={isBusy(`excel-${r._id}`)}
+                  className="text-xs text-purple-300 bg-transparent p-0"
                   onClick={() => {
                     clearFeedback();
-                    reportsApi.export(id, r._id, "excel").catch((e) =>
-                      setActionError(getErrorMessage(e))
-                    );
+                    runBusy(`excel-${r._id}`, () =>
+                      reportsApi.export(id!, r._id, "excel")
+                    ).catch((e) => setActionError(getErrorMessage(e)));
                   }}
                 >
                   Excel
-                </button>
+                </LoadingButton>
               </div>
             </div>
           ))}
