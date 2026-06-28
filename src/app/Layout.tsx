@@ -35,7 +35,7 @@ export default function Layout() {
     { to: "/projects", label: "Projects", icon: ListTodo },
     { to: "/sprints", label: "Task Board", icon: GitBranch },
     { to: "/estimation", label: "Estimation", icon: BarChart3 },
-    { to: "/analytics", label: "Budget Analytics", icon: TrendingDown },
+    { to: "/analytics", label: "Budget", icon: TrendingDown },
     { to: "/reports", label: "Reports", icon: FileText },
     { to: "/settings", label: "Settings", icon: SettingsIcon },
   ];

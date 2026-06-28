@@ -58,6 +58,7 @@ export interface Task {
   status: "todo" | "in_progress" | "done";
   priority: "low" | "medium" | "high";
   assigneeId?: User | string | null;
+  assigneeIds?: Array<User | string>;
   estimatedHours?: number;
   actualHours?: number;
   hourlyRate?: number;

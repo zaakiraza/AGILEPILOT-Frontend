@@ -1,7 +1,9 @@
 import type { Project } from "../types/api";
 
-const inputCls =
-  "p-2 bg-white/[0.02] border border-white/[0.06] rounded text-sm text-white w-full";
+export const inputCls =
+  "p-2 bg-[#18181b] border border-white/[0.06] rounded text-sm text-white w-full [color-scheme:dark]";
+
+export const selectCls = inputCls;
 
 export function ProjectPicker({
   projects,
@@ -20,7 +22,7 @@ export function ProjectPicker({
     <label className="block space-y-1">
       <span className="text-xs text-white/40">{label}</span>
       <select
-        className={inputCls}
+        className={selectCls}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -34,5 +36,3 @@ export function ProjectPicker({
     </label>
   );
 }
-
-export { inputCls };

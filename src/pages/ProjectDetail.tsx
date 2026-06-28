@@ -6,38 +6,35 @@ import {
   milestonesApi,
   tasksApi,
   usersApi,
-  estimatesApi,
-  budgetApi,
-  reportsApi,
 } from "../services/api";
 import { useAuth } from "../context/AuthContext";
-import { inputCls } from "../components/ProjectPicker";
+import { inputCls, selectCls } from "../components/ProjectPicker";
 import { LoadingButton } from "../components/LoadingButton";
-import { useBusyAction } from "../hooks/useBusyAction";
 import { getErrorMessage } from "../utils/errors";
-import type {
-  Budget,
-  BudgetAnalysis,
-  EstimateSummary,
-  Milestone,
-  ProgressReport,
-  Project,
-  ProjectMember,
-  Task,
-  User,
-} from "../types/api";
+import { canManageProject, projectManagerId } from "../utils/projectAccess";
+import type { Milestone, Project, ProjectMember, User } from "../types/api";
 
-const TABS = [
-  "overview",
-  "milestones",
-  "tasks",
-  "members",
-  "estimate",
-  "budget",
-  "reports",
+const TABS = ["overview", "milestones", "members"] as const;
+type Tab = (typeof TABS)[number];
+
+const SIDEBAR_LINKS = [
+  { to: "sprints", label: "Task Board" },
+  { to: "estimation", label: "Estimation" },
+  { to: "analytics", label: "Budget" },
+  { to: "reports", label: "Reports" },
 ] as const;
 
-type Tab = (typeof TABS)[number];
+const ROLE_LABELS: Record<string, string> = {
+  projectManager: "Project Manager",
+  teamLead: "Team Lead",
+  teamMember: "Team Member",
+};
+
+function roleBadgeClass(role: string) {
+  if (role === "projectManager") return "bg-purple-600/20 text-purple-200 border-purple-500/30";
+  if (role === "teamLead") return "bg-amber-600/20 text-amber-200 border-amber-500/30";
+  return "bg-white/[0.04] text-white/60 border-white/10";
+}
 
 export default function ProjectDetail() {
   const { id } = useParams();
@@ -45,21 +42,16 @@ export default function ProjectDetail() {
   const [tab, setTab] = React.useState<Tab>("overview");
   const [project, setProject] = React.useState<Project | null>(null);
   const [milestones, setMilestones] = React.useState<Milestone[]>([]);
-  const [tasks, setTasks] = React.useState<Task[]>([]);
+  const [taskCount, setTaskCount] = React.useState(0);
   const [members, setMembers] = React.useState<ProjectMember[]>([]);
   const [pm, setPm] = React.useState<User | null>(null);
   const [orgUsers, setOrgUsers] = React.useState<User[]>([]);
-  const [summary, setSummary] = React.useState<EstimateSummary | null>(null);
-  const [budget, setBudget] = React.useState<Budget | null>(null);
-  const [analysis, setAnalysis] = React.useState<BudgetAnalysis | null>(null);
-  const [reports, setReports] = React.useState<ProgressReport[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [canViewMembers, setCanViewMembers] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionLoading, setActionLoading] = React.useState(false);
-  const { run: runBusy, isBusy } = useBusyAction();
 
   const isAdmin = user?.orgRole === "admin";
   const isSuperAdmin = user?.orgRole === "superAdmin";
@@ -84,36 +76,22 @@ export default function ProjectDetail() {
     }
   }
 
-  function projectManagerId(project: Project | null): string {
-    if (!project) return "";
-    const pmRef = project.projectManagerId;
-    return typeof pmRef === "object" ? pmRef._id : pmRef ?? "";
-  }
-
-  function canManageProject(project: Project | null): boolean {
-    if (!user || !project) return false;
-    return isPlatformAdmin || user._id === projectManagerId(project);
-  }
-
   async function load() {
     if (!id) return;
     setLoading(true);
     setError(null);
     try {
       const p = await projectsApi.get(id);
-      const manageProject = canManageProject(p);
 
-      const [ms, ts, mem, rep] = await Promise.all([
+      const [ms, ts, mem] = await Promise.all([
         milestonesApi.list(id),
         tasksApi.list(id),
         projectsApi.listMembers(id).catch(() => null),
-        reportsApi.list(id).catch(() => []),
       ]);
 
       setProject(p);
       setMilestones(ms);
-      setTasks(ts);
-      setReports(rep);
+      setTaskCount(ts.length);
 
       if (mem) {
         setMembers(mem.members);
@@ -121,30 +99,8 @@ export default function ProjectDetail() {
         setCanViewMembers(true);
       } else {
         setMembers([]);
-        setPm(
-          typeof p.projectManagerId === "object" ? p.projectManagerId : null
-        );
+        setPm(typeof p.projectManagerId === "object" ? p.projectManagerId : null);
         setCanViewMembers(false);
-      }
-
-      if (manageProject) {
-        try {
-          setSummary(await estimatesApi.summary(id));
-        } catch {
-          setSummary(null);
-        }
-        try {
-          const b = await budgetApi.get(id);
-          setBudget(b.budget);
-          setAnalysis(await budgetApi.analysis(id));
-        } catch {
-          setBudget(null);
-          setAnalysis(null);
-        }
-      } else {
-        setSummary(null);
-        setBudget(null);
-        setAnalysis(null);
       }
 
       if (isPlatformAdmin) {
@@ -174,51 +130,15 @@ export default function ProjectDetail() {
     load();
   }, [id]);
 
-  const milestoneForm = useForm<{ title: string; description?: string }>();
-  const taskForm = useForm<{
-    title: string;
-    milestoneId: string;
-    priority: string;
-    assigneeId?: string;
-    estimatedHours: number;
-    hourlyRate: number;
-  }>();
-  const memberForm = useForm<{ userId: string }>();
-  const changePmForm = useForm<{ projectManagerId: string }>();
-  const budgetForm = useForm<{ allocatedAmount: number }>();
-  const expenseForm = useForm<{
-    date: string;
-    category: string;
-    amount: number;
-    description?: string;
-  }>();
-  const reportForm = useForm<{
-    periodStart: string;
-    periodEnd: string;
-    manualNotes?: string;
-  }>();
-  const estimateForm = useForm<{
-    contingencyPercent: number;
-    notes?: string;
-  }>();
-
   React.useEffect(() => {
-    if (!project) return;
-    const manage = isPlatformAdmin || user?._id === projectManagerId(project);
-    const teamMemberOnProject = !isPlatformAdmin && !manage && !canViewMembers;
-
     if (!canViewMembers && tab === "members") {
       setTab("overview");
-      return;
     }
-    if (!manage && !isPlatformAdmin && (tab === "estimate" || tab === "budget")) {
-      setTab("overview");
-      return;
-    }
-    if (teamMemberOnProject && tab === "reports") {
-      setTab("overview");
-    }
-  }, [canViewMembers, tab, project, isPlatformAdmin, user?._id]);
+  }, [canViewMembers, tab]);
+
+  const milestoneForm = useForm<{ title: string; description?: string }>();
+  const memberForm = useForm<{ userId: string }>();
+  const changePmForm = useForm<{ projectManagerId: string }>();
 
   if (!id) return null;
   if (loading) {
@@ -232,15 +152,9 @@ export default function ProjectDetail() {
   if (!project) return null;
 
   const pmId = projectManagerId(project);
-  const canManage = canManageProject(project);
-  const isTeamMemberOnProject = !isPlatformAdmin && !canManage && !canViewMembers;
+  const canManage = canManageProject(project, user);
 
-  const visibleTabs = TABS.filter((t) => {
-    if (t === "members" && !canViewMembers) return false;
-    if ((t === "estimate" || t === "budget") && !canManage) return false;
-    if (t === "reports" && isTeamMemberOnProject) return false;
-    return true;
-  });
+  const visibleTabs = TABS.filter((t) => t !== "members" || canViewMembers);
 
   const memberUserIds = new Set(
     members.map((m) =>
@@ -261,32 +175,26 @@ export default function ProjectDetail() {
     (u) => u._id !== pmId && !memberUserIds.has(u._id)
   );
 
-  const assigneeCandidates: User[] = [];
-  const assigneeSeen = new Set<string>();
-  const addAssignee = (u: User | string | null | undefined) => {
-    if (!u || typeof u === "string") return;
-    if (assigneeSeen.has(u._id)) return;
-    assigneeSeen.add(u._id);
-    assigneeCandidates.push(u);
-  };
-  if (typeof project.projectManagerId === "object") {
-    addAssignee(project.projectManagerId);
-  }
-  addAssignee(pm);
-  members.forEach((m) => {
-    if (typeof m.userId === "object") addAssignee(m.userId);
-  });
-
   const pmName =
     typeof project.projectManagerId === "object"
       ? project.projectManagerId.name
       : pm?.name ?? "—";
 
-  const cols: { key: Task["status"]; label: string }[] = [
-    { key: "todo", label: "To Do" },
-    { key: "in_progress", label: "In Progress" },
-    { key: "done", label: "Done" },
-  ];
+  const pmEmail =
+    typeof project.projectManagerId === "object"
+      ? project.projectManagerId.email
+      : pm?.email ?? "";
+
+  const teamMembers = members.filter((m) => m.projectRole !== "projectManager");
+  const teamSize = (pmName !== "—" ? 1 : 0) + teamMembers.length;
+
+  const sidebarLinks = SIDEBAR_LINKS.filter((link) => {
+    if (link.to === "estimation" || link.to === "analytics") return canManage;
+    if (link.to === "reports") {
+      return !(!canManage && !isPlatformAdmin && !canViewMembers);
+    }
+    return true;
+  });
 
   return (
     <div className="space-y-4">
@@ -329,18 +237,35 @@ export default function ProjectDetail() {
       )}
 
       {tab === "overview" && (
-        <div className="grid md:grid-cols-3 gap-3">
-          <div className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl">
-            <div className="text-xs text-white/40">Status</div>
-            <div className="font-semibold">{project.status}</div>
+        <div className="space-y-4">
+          <div className="grid md:grid-cols-3 gap-3">
+            <div className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl">
+              <div className="text-xs text-white/40">Status</div>
+              <div className="font-semibold">{project.status}</div>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl">
+              <div className="text-xs text-white/40">Milestones</div>
+              <div className="font-semibold">{milestones.length}</div>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl">
+              <div className="text-xs text-white/40">Tasks</div>
+              <div className="font-semibold">{taskCount}</div>
+            </div>
           </div>
-          <div className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl">
-            <div className="text-xs text-white/40">Milestones</div>
-            <div className="font-semibold">{milestones.length}</div>
-          </div>
-          <div className="bg-white/[0.03] border border-white/[0.06] p-4 rounded-xl">
-            <div className="text-xs text-white/40">Tasks</div>
-            <div className="font-semibold">{tasks.length}</div>
+
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4">
+            <div className="text-xs text-white/40 mb-3">Quick links</div>
+            <div className="flex flex-wrap gap-2">
+              {sidebarLinks.map((link) => (
+                <Link
+                  key={link.to}
+                  to={`/${link.to}?project=${id}`}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-purple-600/20 text-purple-200 border border-purple-500/25 hover:bg-purple-600/30"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -377,452 +302,187 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {tab === "tasks" && (
-        <div className="space-y-4">
-          {canManage && milestones.length > 0 && (
-            <form
-              onSubmit={taskForm.handleSubmit((data) =>
-                runAction(async () => {
-                  await tasksApi.create(id, {
-                    ...data,
-                    assigneeId: data.assigneeId || undefined,
-                    estimatedHours: Number(data.estimatedHours),
-                    hourlyRate: Number(data.hourlyRate),
-                    status: "todo",
-                  });
-                  taskForm.reset();
-                }, "Task created")
-              )}
-              className="grid md:grid-cols-3 gap-2 bg-white/[0.02] p-3 rounded-xl"
-            >
-              <input {...taskForm.register("title", { required: true })} placeholder="Task title" className={inputCls} />
-              <select {...taskForm.register("milestoneId", { required: true })} className={inputCls}>
-                {milestones.map((m) => (
-                  <option key={m._id} value={m._id}>{m.title}</option>
-                ))}
-              </select>
-              <select {...taskForm.register("assigneeId")} className={inputCls} defaultValue="">
-                <option value="">Unassigned</option>
-                {assigneeCandidates.map((u) => (
-                  <option key={u._id} value={u._id}>
-                    {u.name}
-                  </option>
-                ))}
-              </select>
-              <select {...taskForm.register("priority")} className={inputCls}>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-              <input type="number" {...taskForm.register("estimatedHours")} placeholder="Est. hours" className={inputCls} />
-              <input type="number" {...taskForm.register("hourlyRate")} placeholder="Hourly rate" className={inputCls} />
-              <LoadingButton
-                type="submit"
-                loading={actionLoading}
-                className="px-3 py-2 bg-purple-600 rounded text-sm"
-              >
-                Add task
-              </LoadingButton>
-            </form>
-          )}
-          <div className="grid md:grid-cols-3 gap-3">
-            {cols.map((col) => (
-              <div key={col.key}>
-                <h4 className="text-xs font-semibold text-white/50 mb-2">{col.label}</h4>
-                <div className="space-y-2">
-                  {tasks
-                    .filter((t) => t.status === col.key)
-                    .map((t) => {
-                      const assigneeId =
-                        typeof t.assigneeId === "object"
-                          ? t.assigneeId?._id
-                          : t.assigneeId;
-                      const assigneeName =
-                        typeof t.assigneeId === "object"
-                          ? t.assigneeId?.name
-                          : null;
-                      const canUpdateTask =
-                        canManage || assigneeId === user?._id;
-
-                      return (
-                      <div key={t._id} className="p-3 bg-white/[0.03] border border-white/[0.06] rounded-lg">
-                        <div className="text-sm font-medium">{t.title}</div>
-                        <div className="text-[10px] text-white/40">
-                          {t.priority}
-                          {assigneeName ? ` · ${assigneeName}` : " · Unassigned"}
-                        </div>
-                        {canManage && (
-                          <select
-                            className="mt-2 text-xs bg-transparent border border-white/10 rounded p-1 w-full"
-                            value={assigneeId ?? ""}
-                            onChange={async (e) => {
-                              clearFeedback();
-                              try {
-                                await tasksApi.update(id, t._id, {
-                                  assigneeId: e.target.value || null,
-                                });
-                                await load();
-                              } catch (err: unknown) {
-                                setActionError(getErrorMessage(err));
-                              }
-                            }}
-                          >
-                            <option value="">Unassigned</option>
-                            {assigneeCandidates.map((u) => (
-                              <option key={u._id} value={u._id}>
-                                {u.name}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                        {canUpdateTask ? (
-                        <select
-                          className="mt-2 text-xs bg-transparent border border-white/10 rounded p-1"
-                          value={t.status}
-                          onChange={async (e) => {
-                            clearFeedback();
-                            try {
-                              await tasksApi.update(id, t._id, { status: e.target.value });
-                              await load();
-                            } catch (err: unknown) {
-                              setActionError(getErrorMessage(err));
-                            }
-                          }}
-                        >
-                          <option value="todo">todo</option>
-                          <option value="in_progress">in_progress</option>
-                          <option value="done">done</option>
-                        </select>
-                        ) : (
-                          <div className="mt-2 text-[10px] text-white/30 capitalize">{t.status.replace("_", " ")}</div>
-                        )}
-                      </div>
-                    );})}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {tab === "members" && (
-        <div className="space-y-3">
-          <div className="p-3 border border-white/[0.06] rounded-lg">
-            <div className="text-xs text-white/40">Project Manager</div>
-            <div>{pmName}</div>
-          </div>
-
+        <div className="space-y-6 max-w-2xl">
           {isPlatformAdmin && (
-            <form
-              onSubmit={changePmForm.handleSubmit((data) =>
-                runAction(async () => {
-                  await projectsApi.changeManager(id, data.projectManagerId);
-                  changePmForm.reset();
-                }, "Project manager updated")
-              )}
-              className="flex flex-col gap-2 bg-white/[0.02] border border-white/[0.06] p-3 rounded-xl"
-            >
-              <div className="text-xs text-white/40">
-                Assign or replace project manager (one per project)
-              </div>
-              <div className="flex gap-2">
-                <select
-                  {...changePmForm.register("projectManagerId", { required: true })}
-                  className={inputCls}
-                  defaultValue={pmId}
-                >
-                  <option value="">Select project manager…</option>
-                  {pmCandidates.map((u) => (
-                    <option key={u._id} value={u._id}>
-                      {u.name} ({u.email})
-                    </option>
-                  ))}
-                </select>
-                <LoadingButton
-                  type="submit"
-                  loading={actionLoading}
-                  className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0"
-                >
-                  {pmId ? "Change PM" : "Assign PM"}
-                </LoadingButton>
-              </div>
-            </form>
-          )}
-
-          {isPlatformAdmin && (
-            <form
-              onSubmit={memberForm.handleSubmit((data) =>
-                runAction(async () => {
-                  await projectsApi.addMember(id, data.userId);
-                  memberForm.reset();
-                }, "Member added")
-              )}
-              className="flex flex-col gap-2"
-            >
-              <div className="text-xs text-white/40">Add team member (admin only, teamMember role)</div>
-              <div className="flex gap-2">
-                <select {...memberForm.register("userId", { required: true })} className={inputCls}>
-                  <option value="">Select team member…</option>
-                  {teamMemberCandidates.map((u) => (
-                    <option key={u._id} value={u._id}>
-                      {u.name} ({u.email})
-                    </option>
-                  ))}
-                </select>
-                <LoadingButton
-                  type="submit"
-                  loading={actionLoading}
-                  className="px-3 py-2 bg-purple-600 rounded text-sm shrink-0"
-                >
-                  Add
-                </LoadingButton>
-              </div>
-            </form>
-          )}
-          {members.map((m) => {
-            const u = typeof m.userId === "object" ? m.userId : null;
-            return (
-              <div key={m._id} className="flex justify-between p-3 border border-white/[0.06] rounded-lg">
+            <>
+              {/* ── Change PM ── */}
+              <section className="p-4 bg-purple-600/5 border border-purple-500/20 rounded-xl space-y-3">
                 <div>
-                  <div>{u?.name ?? m.userId}</div>
-                  <div className="text-xs text-white/40">{m.projectRole}</div>
+                  <h3 className="text-sm font-semibold text-purple-200">Change project manager</h3>
+                  <p className="text-xs text-white/40 mt-1">
+                    The PM leads the project and manages budget & estimates. Only one PM per project.
+                  </p>
                 </div>
-                {isPlatformAdmin && u && (
-                  <div className="flex gap-2">
-                    {m.projectRole === "teamMember" && (
-                      <LoadingButton
-                        loading={actionLoading}
-                        className="text-xs text-purple-300 bg-transparent p-0"
-                        onClick={() =>
-                          runAction(
-                            () => projectsApi.promoteLead(id!, u._id).then(() => {}),
-                            "Member promoted to team lead"
-                          )
-                        }
-                      >
-                        Promote lead
-                      </LoadingButton>
-                    )}
-                    {m.projectRole === "teamLead" && (
-                      <LoadingButton
-                        loading={actionLoading}
-                        className="text-xs text-purple-300 bg-transparent p-0"
-                        onClick={() =>
-                          runAction(
-                            () => projectsApi.demoteLead(id!, u._id).then(() => {}),
-                            "Team lead demoted"
-                          )
-                        }
-                      >
-                        Demote
-                      </LoadingButton>
-                    )}
-                    <LoadingButton
-                      loading={actionLoading}
-                      className="text-xs text-red-400 bg-transparent p-0"
-                      onClick={() =>
-                        runAction(
-                          () => projectsApi.removeMember(id!, u._id).then(() => {}),
-                          "Member removed"
-                        )
-                      }
-                    >
-                      Remove
-                    </LoadingButton>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {tab === "estimate" && (
-        <div className="space-y-3">
-          {!canManage ? (
-            <p className="text-sm text-white/40">Estimate access: admin & PM only.</p>
-          ) : (
-            <>
-              {summary && (
-                <div className="grid md:grid-cols-4 gap-3">
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Labor</div>
-                    <div className="font-bold">${summary.laborFromTasks.toFixed(2)}</div>
-                  </div>
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Line items</div>
-                    <div className="font-bold">${summary.lineItemsTotal.toFixed(2)}</div>
-                  </div>
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Contingency</div>
-                    <div className="font-bold">${summary.contingencyAmount.toFixed(2)}</div>
-                  </div>
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Grand total</div>
-                    <div className="font-bold">${summary.grandTotal.toFixed(2)}</div>
-                  </div>
-                </div>
-              )}
-              <form
-                onSubmit={estimateForm.handleSubmit((data) =>
-                  runAction(async () => {
-                    await estimatesApi.upsert(id, {
-                      contingencyPercent: Number(data.contingencyPercent),
-                      notes: data.notes,
-                      lineItems: summary?.lineItems ?? [],
-                    });
-                  }, "Estimate saved")
-                )}
-                className="flex gap-2 items-end"
-              >
-                <label className="text-xs text-white/40">
-                  Contingency %
-                  <input type="number" {...estimateForm.register("contingencyPercent")} className={inputCls} defaultValue={summary?.contingencyPercent ?? 10} />
-                </label>
-                <input {...estimateForm.register("notes")} placeholder="Notes" className={inputCls} />
-                <LoadingButton
-                  type="submit"
-                  loading={actionLoading}
-                  className="px-3 py-2 bg-purple-600 rounded text-sm"
+                <form
+                  onSubmit={changePmForm.handleSubmit((data) =>
+                    runAction(async () => {
+                      await projectsApi.changeManager(id, data.projectManagerId);
+                      changePmForm.reset();
+                    }, "Project manager updated")
+                  )}
+                  className="flex flex-col sm:flex-row gap-2"
                 >
-                  Save estimate
-                </LoadingButton>
-              </form>
+                  <select
+                    {...changePmForm.register("projectManagerId", { required: true })}
+                    className={selectCls}
+                    defaultValue={pmId}
+                  >
+                    <option value="">Select project manager…</option>
+                    {pmCandidates.map((u) => (
+                      <option key={u._id} value={u._id}>
+                        {u.name} ({u.email})
+                      </option>
+                    ))}
+                  </select>
+                  <LoadingButton
+                    type="submit"
+                    loading={actionLoading}
+                    className="px-4 py-2 bg-purple-600 rounded-md text-sm shrink-0"
+                  >
+                    {pmId ? "Change PM" : "Assign PM"}
+                  </LoadingButton>
+                </form>
+              </section>
+
+              {/* ── Add team member ── */}
+              <section className="p-4 bg-white/[0.02] border border-white/[0.08] rounded-xl space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Add team member</h3>
+                  <p className="text-xs text-white/40 mt-1">
+                    Team members work on tasks. This is separate from the project manager role above.
+                  </p>
+                </div>
+                <form
+                  onSubmit={memberForm.handleSubmit((data) =>
+                    runAction(async () => {
+                      await projectsApi.addMember(id, data.userId);
+                      memberForm.reset();
+                    }, "Member added")
+                  )}
+                  className="flex flex-col sm:flex-row gap-2"
+                >
+                  <select {...memberForm.register("userId", { required: true })} className={selectCls}>
+                    <option value="">Select person to add…</option>
+                    {teamMemberCandidates.map((u) => (
+                      <option key={u._id} value={u._id}>
+                        {u.name} ({u.email})
+                      </option>
+                    ))}
+                  </select>
+                  <LoadingButton
+                    type="submit"
+                    loading={actionLoading}
+                    className="px-4 py-2 bg-purple-600 rounded-md text-sm shrink-0"
+                  >
+                    Add to team
+                  </LoadingButton>
+                </form>
+              </section>
             </>
           )}
-        </div>
-      )}
 
-      {tab === "budget" && (
-        <div className="space-y-3">
-          {!canManage ? (
-            <p className="text-sm text-white/40">Budget access: admin & PM only.</p>
-          ) : (
-            <>
-              <form
-                onSubmit={budgetForm.handleSubmit((data) =>
-                  runAction(async () => {
-                    await budgetApi.upsert(id, {
-                      allocatedAmount: Number(data.allocatedAmount),
-                      currency: project.currency,
-                    });
-                  }, "Budget saved")
-                )}
-                className="flex gap-2"
-              >
-                <input type="number" {...budgetForm.register("allocatedAmount")} placeholder="Allocated amount" className={inputCls} defaultValue={budget?.allocatedAmount} />
-                <LoadingButton
-                  type="submit"
-                  loading={actionLoading}
-                  className="px-3 py-2 bg-purple-600 rounded text-sm"
-                >
-                  Set budget
-                </LoadingButton>
-              </form>
-              {analysis && (
-                <div className="grid md:grid-cols-3 gap-3">
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Spent</div>
-                    <div className="font-bold">${analysis.totalSpent.toFixed(2)}</div>
-                  </div>
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Variance</div>
-                    <div className="font-bold">${analysis.variance.toFixed(2)}</div>
-                  </div>
-                  <div className="p-3 bg-white/[0.03] rounded-lg">
-                    <div className="text-xs text-white/40">Utilization</div>
-                    <div className="font-bold">{analysis.utilizationPercent}%</div>
-                  </div>
-                </div>
-              )}
-              <form
-                onSubmit={expenseForm.handleSubmit((data) =>
-                  runAction(async () => {
-                    await budgetApi.addExpense(id, {
-                      ...data,
-                      amount: Number(data.amount),
-                    });
-                    expenseForm.reset();
-                  }, "Expense added")
-                )}
-                className="grid md:grid-cols-4 gap-2"
-              >
-                <input type="date" {...expenseForm.register("date", { required: true })} className={inputCls} />
-                <input {...expenseForm.register("category", { required: true })} placeholder="Category" className={inputCls} />
-                <input type="number" {...expenseForm.register("amount", { required: true })} placeholder="Amount" className={inputCls} />
-                <LoadingButton
-                  type="submit"
-                  loading={actionLoading}
-                  className="px-3 py-2 bg-purple-600 rounded text-sm"
-                >
-                  Add expense
-                </LoadingButton>
-              </form>
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === "reports" && (
-        <div className="space-y-3">
-          <form
-            onSubmit={reportForm.handleSubmit((data) =>
-              runAction(async () => {
-                await reportsApi.create(id, data);
-                reportForm.reset();
-              }, "Report submitted")
-            )}
-            className="grid md:grid-cols-3 gap-2 bg-white/[0.02] p-3 rounded-xl"
-          >
-            <input type="date" {...reportForm.register("periodStart", { required: true })} className={inputCls} />
-            <input type="date" {...reportForm.register("periodEnd", { required: true })} className={inputCls} />
-            <input {...reportForm.register("manualNotes")} placeholder="Notes" className={inputCls} />
-            <LoadingButton
-              type="submit"
-              loading={actionLoading}
-              className="px-3 py-2 bg-purple-600 rounded text-sm"
-            >
-              Submit report
-            </LoadingButton>
-          </form>
-          {reports.map((r) => (
-            <div key={r._id} className="p-3 border border-white/[0.06] rounded-lg flex justify-between">
+          {/* ── Team roster ── */}
+          <section>
+            <div className="flex items-baseline justify-between mb-3">
               <div>
-                <div className="text-sm">
-                  {r.periodStart?.slice(0, 10)} → {r.periodEnd?.slice(0, 10)}
-                </div>
-                <div className="text-xs text-white/40">
-                  {r.autoCompletionPercent}% · {r.manualNotes}
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <LoadingButton
-                  loading={isBusy(`pdf-${r._id}`)}
-                  className="text-xs text-purple-300 bg-transparent p-0"
-                  onClick={() => {
-                    clearFeedback();
-                    runBusy(`pdf-${r._id}`, () =>
-                      reportsApi.export(id!, r._id, "pdf")
-                    ).catch((e) => setActionError(getErrorMessage(e)));
-                  }}
-                >
-                  PDF
-                </LoadingButton>
-                <LoadingButton
-                  loading={isBusy(`excel-${r._id}`)}
-                  className="text-xs text-purple-300 bg-transparent p-0"
-                  onClick={() => {
-                    clearFeedback();
-                    runBusy(`excel-${r._id}`, () =>
-                      reportsApi.export(id!, r._id, "excel")
-                    ).catch((e) => setActionError(getErrorMessage(e)));
-                  }}
-                >
-                  Excel
-                </LoadingButton>
+                <h3 className="text-sm font-semibold">Team roster</h3>
+                <p className="text-xs text-white/40 mt-0.5">
+                  {teamSize} {teamSize === 1 ? "person" : "people"} on this project
+                </p>
               </div>
             </div>
-          ))}
+
+            <div className="space-y-2">
+              {/* PM */}
+              <div className="flex items-center justify-between gap-3 p-4 bg-purple-600/5 border border-purple-500/20 rounded-xl">
+                <div className="min-w-0">
+                  <div className="font-medium">{pmName}</div>
+                  {pmEmail && <div className="text-xs text-white/40 truncate">{pmEmail}</div>}
+                </div>
+                <span
+                  className={`shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full border ${roleBadgeClass("projectManager")}`}
+                >
+                  Project Manager
+                </span>
+              </div>
+
+              {/* Team members */}
+              {teamMembers.length === 0 ? (
+                <div className="p-4 border border-dashed border-white/[0.08] rounded-xl text-sm text-white/40 text-center">
+                  No team members yet — use &ldquo;Add team member&rdquo; above
+                </div>
+              ) : (
+                teamMembers.map((m) => {
+                  const u = typeof m.userId === "object" ? m.userId : null;
+                  return (
+                    <div
+                      key={m._id}
+                      className="flex items-center justify-between gap-3 p-4 bg-white/[0.02] border border-white/[0.06] rounded-xl"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium">{u?.name ?? m.userId}</div>
+                        {u?.email && (
+                          <div className="text-xs text-white/40 truncate">{u.email}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${roleBadgeClass(m.projectRole)}`}
+                        >
+                          {ROLE_LABELS[m.projectRole] ?? m.projectRole}
+                        </span>
+                        {isPlatformAdmin && u && (
+                          <>
+                            {m.projectRole === "teamMember" && (
+                              <LoadingButton
+                                loading={actionLoading}
+                                className="px-2.5 py-1 text-xs rounded-md border border-purple-500/40 bg-purple-600/15 text-purple-200 hover:bg-purple-600/25"
+                                onClick={() =>
+                                  runAction(
+                                    () => projectsApi.promoteLead(id!, u._id).then(() => {}),
+                                    "Member promoted to team lead"
+                                  )
+                                }
+                              >
+                                Promote lead
+                              </LoadingButton>
+                            )}
+                            {m.projectRole === "teamLead" && (
+                              <LoadingButton
+                                loading={actionLoading}
+                                className="px-2.5 py-1 text-xs rounded-md border border-white/15 bg-white/[0.04] text-white/70 hover:bg-white/[0.08]"
+                                onClick={() =>
+                                  runAction(
+                                    () => projectsApi.demoteLead(id!, u._id).then(() => {}),
+                                    "Team lead demoted"
+                                  )
+                                }
+                              >
+                                Demote
+                              </LoadingButton>
+                            )}
+                            <LoadingButton
+                              loading={actionLoading}
+                              className="px-2.5 py-1 text-xs rounded-md border border-red-500/40 bg-red-600/10 text-red-300 hover:bg-red-600/20"
+                              onClick={() =>
+                                runAction(
+                                  () => projectsApi.removeMember(id!, u._id).then(() => {}),
+                                  "Member removed"
+                                )
+                              }
+                            >
+                              Remove
+                            </LoadingButton>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
         </div>
       )}
     </div>
